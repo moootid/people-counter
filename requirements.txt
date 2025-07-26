@@ -1,0 +1,13 @@
+fastapi
+uvicorn[standard]
+sqlalchemy[asyncio]
+asyncpg
+pydantic
+torch
+torchvision
+ultralytics
+opencv-python
+requests
+boto3
+python-dotenv
+python-multipart
