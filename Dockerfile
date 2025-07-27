@@ -42,8 +42,8 @@ COPY requirements.txt .
 # Install Python dependencies
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Download YOLOv8 model
-RUN python -c "from ultralytics import YOLO; YOLO('yolo11n.pt')"
+# Copy YOLO model from codebase
+COPY yolo11n.pt ./
 
 # Copy application code
 COPY app/ ./app/
