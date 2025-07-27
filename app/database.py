@@ -1,5 +1,5 @@
 import os
-from sqlalchemy import URL
+from sqlalchemy import URL, text
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
 from sqlalchemy.orm import sessionmaker
 from contextlib import asynccontextmanager
@@ -107,7 +107,7 @@ async def get_db_session():
         logger.debug("Database session created successfully")
         
         # Test the connection
-        await session.execute("SELECT 1")
+        await session.execute(text("SELECT 1"))
         logger.debug("Database connection test successful")
         
         yield session
@@ -136,7 +136,7 @@ async def test_database_connection():
     logger.info("Testing database connection...")
     try:
         async with get_db_session() as session:
-            result = await session.execute("SELECT version()")
+            result = await session.execute(text("SELECT version()"))
             db_version = result.scalar()
             logger.info(f"Database connection successful! PostgreSQL version: {db_version}")
             return True, f"Connected to PostgreSQL: {db_version}"
