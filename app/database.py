@@ -18,6 +18,7 @@ url = URL.create(
     password=os.getenv("DB_PASSWORD"),
     host=os.getenv("DB_HOST"),
     database=os.getenv("DB_NAME"),
+    port=os.getenv("DB_PORT", "5432")  # Default PostgreSQL port
 )
 print(f"Connecting to database at {url}")
 # Create async engine
