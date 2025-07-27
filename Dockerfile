@@ -48,6 +48,10 @@ COPY yolo11n.pt ./
 # Copy application code
 COPY app/ ./app/
 
+COPY debug_production.py ./debug_production.py
+COPY check_env.py ./check_env.py
+COPY setup_logging.py ./setup_logging.py
+COPY test_db_connection.py ./test_db_connection.py
 # Create non-root user
 RUN useradd -m -u 1000 appuser && chown -R appuser:appuser /app
 USER appuser
