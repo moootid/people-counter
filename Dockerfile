@@ -1,4 +1,4 @@
-FROM nvidia/cuda:12.9.1-cudnn-runtime-ubuntu24.04
+FROM python:3.12
 
 # Set environment variables
 ENV PYTHONUNBUFFERED=1
@@ -6,18 +6,33 @@ ENV DEBIAN_FRONTEND=noninteractive
 
 # Install system dependencies
 RUN apt-get update && apt-get install -y \
-    python3 \
-    python3-pip \
-    python3-dev \
     libglib2.0-0 \
     libsm6 \
     libxext6 \
     libxrender-dev \
     libgomp1 \
     libgl1-mesa-glx \
+    libglib2.0-0 \
+    libgtk-3-0 \
+    libavcodec-dev \
+    libavformat-dev \
+    libswscale-dev \
+    libv4l-dev \
+    libxvidcore-dev \
+    libx264-dev \
+    libjpeg-dev \
+    libpng-dev \
+    libtiff-dev \
+    libatlas-base-dev \
+    gfortran \
     wget \
-    && rm -rf /var/lib/apt/lists/*
+    curl \
+    && rm -rf /var/lib/apt/lists/* 
 
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    nvidia-driver \
+    nvidia-smi || true \
+    && rm -rf /var/lib/apt/lists/*
 # Set work directory
 WORKDIR /app
 
@@ -25,10 +40,10 @@ WORKDIR /app
 COPY requirements.txt .
 
 # Install Python dependencies
-RUN pip3 install --no-cache-dir -r requirements.txt
+RUN pip install --no-cache-dir -r requirements.txt
 
 # Download YOLOv8 model
-RUN python3 -c "from ultralytics import YOLO; YOLO('yolo11n.pt')"
+RUN python -c "from ultralytics import YOLO; YOLO('yolo11n.pt')"
 
 # Copy application code
 COPY app/ ./app/
