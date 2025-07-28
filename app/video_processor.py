@@ -28,14 +28,26 @@ class VideoProcessor:
             self.device = "cuda" if torch.cuda.is_available() else "cpu"
             logger.info(f"Using device: {self.device}")
             
+            # Set CPU optimization if running on CPU
+            if self.device == "cpu":
+                # Use all available CPU cores for inference
+                torch.set_num_threads(os.cpu_count() or 4)
+                logger.info(f"CPU optimization: Using {torch.get_num_threads()} threads")
+            
             # Load YOLO model
-            self.model = YOLO("yolo11n.pt")  # nano version for speed
+            model_path = os.getenv("YOLO_MODEL_PATH", "yolo11n.pt")
+            self.model = YOLO(model_path)  # nano version for speed
             self.model.to(self.device)
+            
+            # Set model path for health checks
+            self.model_path = model_path
             
             # Initialize S3 client
             self._initialize_s3_client()
             
-            logger.info("YOLO model initialized successfully")
+            logger.info(f"YOLO model initialized successfully on {self.device}")
+            if self.device == "cpu":
+                logger.info("Running on CPU - expect slower inference times")
         
         except Exception as e:
             logger.error(f"Error initializing model: {str(e)}")

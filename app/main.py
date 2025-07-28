@@ -14,6 +14,9 @@ from dotenv import load_dotenv, dotenv_values
 
 from .database import get_db_session, VideoAnalysis
 from .video_processor import VideoProcessor
+# Prometheus metrics
+from prometheus_fastapi_instrumentator import Instrumentator, metrics
+from prometheus_client import Counter, Histogram, Gauge
 
 # Load environment variables from .env file
 load_dotenv()
@@ -71,6 +74,73 @@ async def log_requests(request: Request, call_next):
         import traceback
         logger.error(f"Full traceback: {traceback.format_exc()}")
         raise
+
+# Configure Prometheus metrics with custom metrics
+instrumentator = Instrumentator(
+    should_group_status_codes=False,
+    should_ignore_untemplated=True,
+    should_respect_env_var=True,
+    should_instrument_requests_inprogress=True,
+    excluded_handlers=["/health", "/metrics"],
+    env_var_name="ENABLE_METRICS",
+    inprogress_name="inprogress",
+    inprogress_labels=True,
+)
+
+# Add custom metrics
+instrumentator.add(
+    metrics.request_size(
+        should_include_handler=True,
+        should_include_method=True,
+        should_include_status=True,
+        metric_namespace="people_counter",
+        metric_subsystem="requests",
+    )
+).add(
+    metrics.response_size(
+        should_include_handler=True,
+        should_include_method=True,
+        should_include_status=True,
+        metric_namespace="people_counter",
+        metric_subsystem="responses",
+    )
+).add(
+    metrics.latency(
+        should_include_handler=True,
+        should_include_method=True,
+        should_include_status=True,
+        metric_namespace="people_counter",
+        metric_subsystem="requests",
+    )
+)
+
+# Instrument the app
+instrumentator.instrument(app).expose(app)
+
+# Custom business metrics
+video_analysis_requests_total = Counter(
+    'people_counter_video_analysis_requests_total',
+    'Total number of video analysis requests',
+    ['user_id', 'status']
+)
+
+video_processing_duration_seconds = Histogram(
+    'people_counter_video_processing_duration_seconds',
+    'Time spent processing videos',
+    ['status'],
+    buckets=[1, 5, 10, 30, 60, 120, 300, 600, 1200, 1800, 3600]
+)
+
+people_count_distribution = Histogram(
+    'people_counter_people_count_distribution',
+    'Distribution of people counts detected in videos',
+    buckets=[0, 1, 2, 5, 10, 20, 50, 100, 200, 500]
+)
+
+active_jobs_gauge = Gauge(
+    'people_counter_active_jobs',
+    'Number of currently active video processing jobs'
+)
 
 # Initialize video processor
 logger.debug("Initializing video processor...")
@@ -161,6 +231,16 @@ async def startup_event():
     logger.info("Starting People Counter API")
     logger.debug("Checking environment configuration...")
     
+    # Log Kubernetes environment info
+    pod_name = os.getenv('HOSTNAME', 'unknown')
+    namespace = os.getenv('POD_NAMESPACE', 'unknown')
+    logger.info(f"Running in Kubernetes pod: {pod_name} in namespace: {namespace}")
+    
+    # Log resource constraints
+    memory_limit = os.getenv('MEMORY_LIMIT', 'unknown')
+    cpu_limit = os.getenv('CPU_LIMIT', 'unknown')
+    logger.info(f"Resource limits - Memory: {memory_limit}, CPU: {cpu_limit}")
+    
     # Log AWS configuration status
     aws_access_key = os.getenv('AWS_ACCESS_KEY_ID')
     aws_region = os.getenv('AWS_DEFAULT_REGION', 'us-east-1')
@@ -181,8 +261,11 @@ async def startup_event():
             logger.info(f"Database connection test successful: {message}")
         else:
             logger.error(f"Database connection test failed: {message}")
+            # In Kubernetes, log this as a critical error but don't exit
+            logger.critical("Database connection failed during startup - this may cause pod restart")
     except Exception as e:
         logger.error(f"Error testing database connection: {e}")
+        logger.critical("Database connection error during startup")
     
     # Initialize video processor
     logger.debug("Initializing video processor...")
@@ -230,6 +313,10 @@ async def analyze_video(
             )
         
         logger.debug(f"User ID validated: {user_id}")
+        
+        # Record metrics
+        video_analysis_requests_total.labels(user_id=str(user_id), status='started').inc()
+        active_jobs_gauge.inc()
         
         # Add background task to process video
         logger.debug("Adding background task for video processing...")
@@ -321,6 +408,8 @@ async def process_video_task(job_id: str, video_id: str, s3_url: str, user_id: s
     logger.info(f"Starting background video processing task for job: {job_id}")
     logger.debug(f"Task parameters: job_id={job_id}, video_id={video_id}, s3_url={s3_url}, user_id={user_id}")
     
+    start_time = time.time()
+    
     try:
         logger.debug("Opening database session to create initial record...")
         async with get_db_session() as session:
@@ -353,6 +442,12 @@ async def process_video_task(job_id: str, video_id: str, s3_url: str, user_id: s
         people_count = await video_processor.count_people_in_video(s3_url)
         logger.info(f"Video processing completed for job {job_id}. People count: {people_count}")
         
+        # Record successful processing metrics
+        processing_time = time.time() - start_time
+        video_processing_duration_seconds.labels(status='success').observe(processing_time)
+        people_count_distribution.observe(people_count)
+        video_analysis_requests_total.labels(user_id=str(user_id), status='completed').inc()
+        
         # Update database with results
         logger.debug("Updating database with successful results...")
         async with get_db_session() as session:
@@ -367,6 +462,9 @@ async def process_video_task(job_id: str, video_id: str, s3_url: str, user_id: s
             await session.commit()
             logger.info(f"Database updated successfully for job: {job_id}")
             
+        # Decrement active jobs counter
+        active_jobs_gauge.dec()
+        
         logger.info(f"Job {job_id} completed successfully. People count: {people_count}")
     
     except Exception as e:
@@ -374,6 +472,11 @@ async def process_video_task(job_id: str, video_id: str, s3_url: str, user_id: s
         logger.error(f"Error type: {type(e).__name__}")
         import traceback
         logger.error(f"Full traceback: {traceback.format_exc()}")
+        
+        # Record failed processing metrics
+        processing_time = time.time() - start_time
+        video_processing_duration_seconds.labels(status='failed').observe(processing_time)
+        video_analysis_requests_total.labels(user_id=str(user_id), status='failed').inc()
         
         # Update database with error
         try:
@@ -388,6 +491,10 @@ async def process_video_task(job_id: str, video_id: str, s3_url: str, user_id: s
                     logger.info(f"Database updated with error status for job: {job_id}")
                 else:
                     logger.error(f"Job record not found when updating error status: {job_id}")
+                    
+                # Decrement active jobs counter even on failure
+                active_jobs_gauge.dec()
+                
         except Exception as db_error:
             logger.error(f"Failed to update database with error status for job {job_id}: {db_error}")
             logger.error(f"Database error type: {type(db_error).__name__}")
@@ -400,7 +507,11 @@ async def health_check():
     health_status = {
         "status": "healthy",
         "timestamp": datetime.utcnow(),
-        "version": "1.0.0"
+        "version": "1.0.0",
+        "kubernetes": {
+            "pod_name": os.getenv('HOSTNAME', 'unknown'),
+            "namespace": os.getenv('POD_NAMESPACE', 'unknown')
+        }
     }
     
     # Test database connection
@@ -411,32 +522,56 @@ async def health_check():
             "status": "healthy" if db_success else "unhealthy",
             "message": db_message
         }
+        if not db_success:
+            health_status["status"] = "unhealthy"
     except Exception as e:
         logger.error(f"Health check database test failed: {e}")
         health_status["database"] = {
             "status": "unhealthy",
             "message": str(e)
         }
+        health_status["status"] = "unhealthy"
     
     # Test video processor
     try:
         # Simple check to see if video processor is accessible
-        if hasattr(video_processor, 'model_path'):
+        if hasattr(video_processor, 'model') and video_processor.model is not None:
             health_status["video_processor"] = {
                 "status": "healthy",
-                "message": "Video processor initialized"
+                "message": f"Video processor initialized on {getattr(video_processor, 'device', 'unknown')}",
+                "model_path": getattr(video_processor, 'model_path', 'unknown')
             }
         else:
             health_status["video_processor"] = {
-                "status": "unknown",
-                "message": "Video processor status unclear"
+                "status": "unhealthy",
+                "message": "Video processor not properly initialized"
             }
+            health_status["status"] = "unhealthy"
     except Exception as e:
         logger.error(f"Health check video processor test failed: {e}")
         health_status["video_processor"] = {
             "status": "unhealthy",
             "message": str(e)
         }
+        health_status["status"] = "unhealthy"
+    
+    # Add memory info if available
+    try:
+        import psutil
+        memory = psutil.virtual_memory()
+        health_status["resources"] = {
+            "memory_percent": memory.percent,
+            "memory_available_mb": memory.available // (1024 * 1024)
+        }
+    except ImportError:
+        health_status["resources"] = {"message": "psutil not available"}
+    except Exception as e:
+        health_status["resources"] = {"error": str(e)}
     
     logger.debug(f"Health check result: {health_status}")
+    
+    # Return appropriate HTTP status code
+    if health_status["status"] == "unhealthy":
+        return JSONResponse(status_code=503, content=health_status)
+    
     return health_status

@@ -27,12 +27,13 @@ RUN apt-get update && apt-get install -y \
     gfortran \
     wget \
     curl \
-    && rm -rf /var/lib/apt/lists/* 
-
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    nvidia-driver \
-    nvidia-smi || true \
     && rm -rf /var/lib/apt/lists/*
+
+# Optional: Install NVIDIA drivers only if available (for GPU support)
+# This will fail gracefully on CPU-only machines
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    nvidia-driver-535 \
+    nvidia-utils-535 || echo "NVIDIA drivers not available - running on CPU"
 # Set work directory
 WORKDIR /app
 
